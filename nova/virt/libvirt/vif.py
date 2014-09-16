@@ -332,6 +332,38 @@ class LibvirtGenericVIFDriver(object):
 
         return conf
 
+    def get_config_hostdev(self, instance, vif, image_meta,
+                               inst_type, virt_type):
+        conf = vconfig.LibvirtConfigGuestHostdevPCI()
+        #dev_name = None
+        dev = None
+        device_id = instance['uuid']
+        vnic_mac = vif['address']
+        network = vif['network']
+        fabric = vif.get_physical_network()
+        if not fabric:
+            raise exception.NetworkMissingPhysicalNetwork(
+                network_uuid=vif['network']['id'])
+
+        try:
+            res = utils.execute('ebrctl', 'allocate-port',
+                                vnic_mac, device_id, fabric,
+                                'hostdev', run_as_root=True)
+
+        except processutils.ProcessExecutionError:
+            LOG.exception(_("Failed while config vif"),
+                          instance=instance)
+            raise exception.NovaException(_("Processing Failure during "
+                                            "vNIC allocation"))
+            #Allocation Failed
+        if res:
+            dev = res[0].strip()
+        else:
+            raise exception.NovaException(_("Failed to allocate "
+                                            "device for vNIC"))
+        designer.set_vif_host_backend_hostdev_config(conf, dev)
+        return conf
+
     def get_config(self, instance, vif, image_meta,
                    inst_type, virt_type):
         vif_type = vif['type']
@@ -476,6 +508,30 @@ class LibvirtGenericVIFDriver(object):
                           run_as_root=True)
         except processutils.ProcessExecutionError:
             LOG.exception(_LE("Failed while plugging vif"), instance=instance)
+
+    def plug_hostdev(self, instance, vif):
+        network = vif['network']
+        vnic_mac = vif['address']
+        device_id = instance['uuid']
+        dev_name = None
+        dev = None
+        fabric = vif.get_physical_network()
+        if not fabric:
+            raise exception.NetworkMissingPhysicalNetwork(
+                network_uuid=vif['network']['id'])
+
+	try:
+            dev = utils.execute('ebrctl', 'add-port', vnic_mac,
+                                device_id, fabric, 'hostdev', dev_name,
+			        run_as_root=True)
+	    if dev:
+	        return
+	    else:
+	        error_msg = "Cannot plug VIF with no allocated device"
+	        LOG.warning(_(error_msg))
+        except Exception:
+            LOG.exception(_("Processing Failure during vNIC plug"))
+
 
     def plug_802qbg(self, instance, vif):
         pass
@@ -624,6 +680,22 @@ class LibvirtGenericVIFDriver(object):
         except processutils.ProcessExecutionError:
             LOG.exception(_LE("Failed while unplugging vif"),
                           instance=instance)
+
+    def unplug_hostdev(self, instance, vif):
+        network = vif['network']
+        vnic_mac = vif['address']
+        fabric = vif.get_physical_network()
+
+        if not fabric:
+           raise exception.NetworkMissingPhysicalNetwork(
+                network_uuid=vif['network']['id'])
+
+        try:
+            utils.execute('ebrctl', 'del-port', fabric,
+                          vnic_mac, run_as_root=True)
+        except Exception:
+            LOG.exception(_("Failed while unplugging vif"))
+
 
     def unplug_802qbg(self, instance, vif):
         pass
